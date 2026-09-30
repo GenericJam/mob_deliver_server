@@ -6,7 +6,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ---
 
-## [0.1.0-dev] - unreleased
+## [0.1.0] - 2026-09-30
 
 ### Added
 - `MobDeliverServer.Manifest` — canonical signing payload (wire format
