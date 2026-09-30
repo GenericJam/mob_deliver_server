@@ -17,7 +17,7 @@ defmodule MobDeliverServer.Plug do
   works):
 
       forward "/deliver", MobDeliverServer.Plug,
-        storage: {MobDeliverServer.Storage.FS, root: "priv/mob_deliver"}
+        storage: {MobDeliverServer.Storage.FS, root: "/srv/mob_deliver"}
 
   and point the client's `:endpoint` at `https://example.com/deliver`.
 

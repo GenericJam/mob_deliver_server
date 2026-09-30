@@ -47,15 +47,24 @@ defmodule Mix.Tasks.MobDeliver.Gen.Key do
     end
   end
 
-  # Created exclusively (never overwrites, even racing another writer) and
-  # chmod'ed to 0600 before any key bytes are written.
+  # The key is written inside a fresh 0700 directory (nobody else can open
+  # the file while it's being filled), then hard-linked into place: `ln`
+  # fails if the target exists, so a key is never overwritten, even racing
+  # another writer.
   defp write_private(path, contents) do
-    with :ok <- File.mkdir_p(Path.dirname(path)),
-         {:ok, device} <- File.open(path, [:write, :exclusive, :binary]) do
+    dir = Path.dirname(path)
+    staging = Path.join(dir, ".mob_deliver_key-" <> MobDeliverServer.random_suffix())
+    staged = Path.join(staging, "key")
+
+    with :ok <- File.mkdir_p(dir),
+         :ok <- File.mkdir(staging) do
       try do
-        with :ok <- File.chmod(path, 0o600), do: IO.binwrite(device, contents)
+        with :ok <- File.chmod(staging, 0o700),
+             :ok <- File.write(staged, contents, [:exclusive]),
+             :ok <- File.chmod(staged, 0o600),
+             do: File.ln(staged, path)
       after
-        File.close(device)
+        File.rm_rf(staging)
       end
     end
   end

@@ -63,7 +63,7 @@ config :mob_deliver,
 ```elixir
 # lib/my_app_web/router.ex
 forward "/deliver", MobDeliverServer.Plug,
-  storage: {MobDeliverServer.Storage.FS, root: "priv/mob_deliver"}
+  storage: {MobDeliverServer.Storage.FS, root: "/srv/mob_deliver"}
 ```
 
 `forward` works from any scope/pipeline; the plug needs no session,
@@ -80,9 +80,12 @@ mix mob_deliver.publish --app com.example.myapp --channel production \
 ```
 
 Runs `mix compile`, compiles every `.ex` under `mobile/` against the
-project, writes `priv/mob_deliver/beam/<sha>` and
-`priv/mob_deliver/manifests/<app>/<channel>.json`, prints one line per
-module, and exits non-zero on any failure. Other options:
+project, writes `mob_deliver_publish/beam/<sha>` and
+`mob_deliver_publish/manifests/<app>/<channel>.json`, prints one line per
+module, and exits non-zero on any failure. Gitignore the output directory
+and keep it out of `priv/` — mob_dev copies the app's whole `priv/` into
+the native binary, which would bundle the delivered screens into the next
+store build. Copy it to the server's storage root. Other options:
 `--mobile-dir`, `--out`, `--min-app-version 1.4.0`,
 `--force-update-after 2026-10-19T00:00:00Z` (see the ADR's
 "Forced-update window").

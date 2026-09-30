@@ -20,7 +20,8 @@ defmodule Mix.Tasks.MobDeliver.Publish do
     * `--key-file` — private key written by `mix mob_deliver.gen.key`.
       Without it the key is read from the `MOB_DELIVER_SIGNING_KEY`
       environment variable (the key file's contents);
-    * `--out` — storage root, default `priv/mob_deliver`;
+    * `--out` — storage root, default `mob_deliver_publish` (keep it out
+      of `priv/`: mob_dev bundles the app's `priv/` into the binary);
     * `--min-app-version` — e.g. `1.4.0`;
     * `--force-update-after` — ISO 8601 timestamp, e.g.
       `2026-10-19T00:00:00Z`.
@@ -48,7 +49,7 @@ defmodule Mix.Tasks.MobDeliver.Publish do
     app = Keyword.get(opts, :app) || Mix.raise("--app is required")
     channel = Keyword.get(opts, :channel, "production")
     mobile_dir = Keyword.get(opts, :mobile_dir, "mobile")
-    out = Keyword.get(opts, :out, "priv/mob_deliver")
+    out = Keyword.get(opts, :out, "mob_deliver_publish")
     private_key = private_key(opts)
 
     Mix.Task.run("compile")

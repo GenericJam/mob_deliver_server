@@ -1,6 +1,6 @@
 defmodule MobDeliverServer.Storage.FS do
   @moduledoc """
-  Filesystem storage: `{MobDeliverServer.Storage.FS, root: "priv/mob_deliver"}`.
+  Filesystem storage: `{MobDeliverServer.Storage.FS, root: "/srv/mob_deliver"}`.
 
   Layout under `root`:
 
@@ -60,18 +60,19 @@ defmodule MobDeliverServer.Storage.FS do
     end
   end
 
+  # The temp name is random (`System.unique_integer/1` repeats across VMs,
+  # and several publishers may share a root) and removed only if this call
+  # created it.
   defp atomic_write(path, binary) do
     dir = Path.dirname(path)
-    tmp = Path.join(dir, ".tmp-" <> Integer.to_string(System.unique_integer([:positive])))
+    tmp = Path.join(dir, ".tmp-" <> MobDeliverServer.random_suffix())
 
     with :ok <- mkdir_p(dir),
-         :ok <- write_synced(tmp, binary),
-         :ok <- rename(tmp, path) do
-      :ok
-    else
-      {:error, _} = error ->
+         :ok <- write_synced(tmp, binary) do
+      with {:error, _} = error <- rename(tmp, path) do
         _ = File.rm(tmp)
         error
+      end
     end
   end
 
@@ -84,9 +85,15 @@ defmodule MobDeliverServer.Storage.FS do
 
   defp write_synced(path, binary) do
     case File.open(path, [:write, :binary, :exclusive], &write_and_sync(&1, binary)) do
-      {:ok, :ok} -> :ok
-      {:ok, {:error, reason}} -> {:error, {:write, path, reason}}
-      {:error, reason} -> {:error, {:write, path, reason}}
+      {:ok, :ok} ->
+        :ok
+
+      {:ok, {:error, reason}} ->
+        _ = File.rm(path)
+        {:error, {:write, path, reason}}
+
+      {:error, reason} ->
+        {:error, {:write, path, reason}}
     end
   end
 

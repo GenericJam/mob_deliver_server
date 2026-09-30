@@ -25,7 +25,7 @@ defmodule MobDeliverServer do
   @typedoc "What `publish/2` wrote: the manifest body and its fields."
   @type published :: %{body: binary(), fields: Manifest.fields()}
 
-  @default_storage {MobDeliverServer.Storage.FS, root: "priv/mob_deliver"}
+  @default_storage {MobDeliverServer.Storage.FS, root: "mob_deliver_publish"}
 
   @doc """
   Compiles `source` — a directory (every `**/*.ex` under it) or a list of
@@ -81,7 +81,7 @@ defmodule MobDeliverServer do
     * `:issued_at` — `DateTime` (default now); clients follow the
       newest `issued_at` for the forced-update gate;
     * `:storage` — `{module, config}` (default
-      `{MobDeliverServer.Storage.FS, root: "priv/mob_deliver"}`).
+      `{MobDeliverServer.Storage.FS, root: "mob_deliver_publish"}`).
   """
   @spec publish(build(), keyword()) :: {:ok, published()} | {:error, term()}
   def publish(build, opts) when is_map(build) do
@@ -118,18 +118,11 @@ defmodule MobDeliverServer do
   end
 
   defp compile(files, opts) do
-    tmp =
-      Path.join(
-        Keyword.get_lazy(opts, :tmp_dir, &System.tmp_dir!/0),
-        "mob_deliver_server_build_" <> Integer.to_string(System.unique_integer([:positive]))
-      )
-
+    tmp = scratch_dir!(Keyword.get_lazy(opts, :tmp_dir, &System.tmp_dir!/0))
     loaded_before = MapSet.new(:code.all_loaded(), &elem(&1, 0))
     previous_options = Code.compiler_options(ignore_module_conflict: true)
 
     try do
-      File.mkdir_p!(tmp)
-
       case Kernel.ParallelCompiler.compile_to_path(files, tmp, return_diagnostics: true) do
         {:ok, modules, _warnings} ->
           unload_new(modules, loaded_before)
@@ -143,6 +136,24 @@ defmodule MobDeliverServer do
       File.rm_rf(tmp)
     end
   end
+
+  # Created exclusively under a random name: `System.unique_integer/1` is
+  # only unique within one VM, and two publishes sharing a scratch dir
+  # would hash and sign each other's BEAMs.
+  defp scratch_dir!(parent) do
+    File.mkdir_p!(parent)
+    dir = Path.join(parent, "mob_deliver_server_build_" <> random_suffix())
+
+    case File.mkdir(dir) do
+      :ok -> dir
+      {:error, :eexist} -> scratch_dir!(parent)
+      {:error, reason} -> raise File.Error, reason: reason, action: "make directory", path: dir
+    end
+  end
+
+  @doc false
+  @spec random_suffix() :: String.t()
+  def random_suffix, do: Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
 
   defp built_module(module, dir) do
     beam = dir |> Path.join(Atom.to_string(module) <> ".beam") |> File.read!() |> strip()
