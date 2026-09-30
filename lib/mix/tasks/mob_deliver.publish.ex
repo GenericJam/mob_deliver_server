@@ -22,9 +22,23 @@ defmodule Mix.Tasks.MobDeliver.Publish do
       environment variable (the key file's contents);
     * `--out` — storage root, default `mob_deliver_publish` (keep it out
       of `priv/`: mob_dev bundles the app's `priv/` into the binary);
-    * `--min-app-version` — e.g. `1.4.0`;
+    * `--min-app-version` — dotted numeric, e.g. `1.4.0`; anything else is
+      rejected (the client's gate couldn't compare it);
     * `--force-update-after` — ISO 8601 timestamp, e.g.
-      `2026-10-19T00:00:00Z`.
+      `2026-10-19T00:00:00Z`; requires `--min-app-version`;
+    * `--force` — publish even though the signing key doesn't match the
+      project's `trusted_publish_key` (see below).
+
+  ## Signing key check
+
+  If the project the task runs in configures
+  `config :mob_deliver, trusted_publish_key: ...` (the mob app's own
+  config), the task refuses to publish with a key whose public half is
+  different: every device built with that config would reject the
+  manifest with `{:error, :invalid_signature}` and never update. Pass
+  `--force` when that is intended — e.g. signing for devices still on an
+  older build during a key rotation. Projects without the setting (a
+  Phoenix server that isn't the mob app) aren't checked.
 
   To publish somewhere other than the local filesystem (S3, GCS), call
   `MobDeliverServer.build/2` + `MobDeliverServer.publish/2` with your own
@@ -40,7 +54,8 @@ defmodule Mix.Tasks.MobDeliver.Publish do
     key_file: :string,
     out: :string,
     min_app_version: :string,
-    force_update_after: :string
+    force_update_after: :string,
+    force: :boolean
   ]
 
   @impl Mix.Task
@@ -51,6 +66,8 @@ defmodule Mix.Tasks.MobDeliver.Publish do
     mobile_dir = Keyword.get(opts, :mobile_dir, "mobile")
     out = Keyword.get(opts, :out, "mob_deliver_publish")
     private_key = private_key(opts)
+    gate_fields!(opts)
+    check_trusted_key!(private_key, Keyword.get(opts, :force, false))
 
     Mix.Task.run("compile")
 
@@ -67,7 +84,7 @@ defmodule Mix.Tasks.MobDeliver.Publish do
 
     case MobDeliverServer.publish(build, publish_opts) do
       {:ok, %{fields: fields}} -> report(fields, out)
-      {:error, reason} -> Mix.raise("mob_deliver.publish failed: #{inspect(reason)}")
+      {:error, reason} -> Mix.raise("mob_deliver.publish failed: #{format_error(reason)}")
     end
   end
 
@@ -94,6 +111,69 @@ defmodule Mix.Tasks.MobDeliver.Publish do
       {:error, reason} -> Mix.raise("could not read #{path}: #{:file.format_error(reason)}")
     end
   end
+
+  # Before compiling: a typo in a gate flag shouldn't cost a build.
+  defp gate_fields!(opts) do
+    case MobDeliverServer.gate_fields(opts) do
+      {:ok, _} -> :ok
+      {:error, reason} -> Mix.raise("mob_deliver.publish: #{format_error(reason)}")
+    end
+  end
+
+  # `mix` loads config/config.exs before running a task, and the client
+  # reads `trusted_publish_key` with `Application.compile_env/2` from
+  # that same config, so the application env is the value devices built
+  # from this project carry.
+  defp check_trusted_key!(private_key, force?) do
+    case Application.get_env(:mob_deliver, :trusted_publish_key) do
+      nil ->
+        :ok
+
+      trusted ->
+        signing = MobDeliverServer.Manifest.public_key_string(private_key)
+        if not same_public_key?(trusted, signing), do: key_mismatch!(trusted, signing, force?)
+    end
+  end
+
+  defp same_public_key?(trusted, signing) do
+    case decode_public(trusted) do
+      :error -> false
+      public -> public == decode_public(signing)
+    end
+  end
+
+  defp decode_public("ed25519:" <> encoded) do
+    case Base.decode64(encoded) do
+      {:ok, <<_::binary-size(32)>> = public} -> public
+      _ -> :error
+    end
+  end
+
+  defp decode_public(_), do: :error
+
+  defp key_mismatch!(trusted, signing, force?) do
+    message =
+      "the signing key's public half (#{signing}) doesn't match " <>
+        "config :mob_deliver, trusted_publish_key: #{inspect(trusted)}; " <>
+        "devices built with that config will reject this manifest (:invalid_signature)"
+
+    if force?,
+      do: Mix.shell().error("warning: #{message}; publishing anyway (--force)"),
+      else: Mix.raise("mob_deliver.publish: #{message}. Pass --force to publish anyway.")
+  end
+
+  defp format_error({:invalid, :min_app_version, value}),
+    do: "--min-app-version must be dotted numeric like 1.4.0, got #{inspect(value)}"
+
+  defp format_error({:invalid, :force_update_after, value}),
+    do:
+      "--force-update-after must be an ISO 8601 timestamp like 2026-10-19T00:00:00Z, " <>
+        "got #{inspect(value)}"
+
+  defp format_error({:force_update_after_without_min_app_version, _deadline}),
+    do: "--force-update-after needs --min-app-version (the client ignores a deadline without it)"
+
+  defp format_error(reason), do: inspect(reason)
 
   defp build!(mobile_dir) do
     case MobDeliverServer.build(mobile_dir) do

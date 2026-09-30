@@ -86,13 +86,43 @@ module, and exits non-zero on any failure. Gitignore the output directory
 and keep it out of `priv/` — mob_dev copies the app's whole `priv/` into
 the native binary, which would bundle the delivered screens into the next
 store build. Copy it to the server's storage root. Other options:
-`--mobile-dir`, `--out`, `--min-app-version 1.4.0`,
-`--force-update-after 2026-10-19T00:00:00Z` (see the ADR's
-"Forced-update window").
+`--mobile-dir`, `--out`, `--min-app-version 1.4.0` (dotted numeric
+only — the form the client's gate compares; anything else is rejected),
+`--force-update-after 2026-10-19T00:00:00Z` (needs `--min-app-version`;
+see the ADR's "Forced-update window").
+
+If the project you publish from configures
+`config :mob_deliver, trusted_publish_key:` (publishing from the mob app
+itself), the task refuses a signing key whose public half doesn't match
+it — every device built from that config would reject the manifest.
+`--force` publishes anyway (e.g. for devices on an older build during a
+key rotation). Projects without that setting aren't checked.
 
 Blobs are written before the manifest, and every write is
 temp-file + rename, so a running server never serves a manifest whose
-BEAMs are missing or a half-written file.
+BEAMs are missing or a half-written file. The manifest a publish
+replaces is kept under `replaced/` for `mob_deliver.prune`.
+
+### 5. Prune old blobs
+
+```bash
+mix mob_deliver.prune --out /srv/mob_deliver --older-than 7d --dry-run
+mix mob_deliver.prune --out /srv/mob_deliver --older-than 7d
+```
+
+Blobs are immutable and publishes only add them. `mob_deliver.prune`
+deletes the ones no manifest in the store references any more (every
+app and channel under the root), after a grace period (`--older-than`,
+default `7d`; units `s`, `m`, `h`, `d`). A blob is kept while a current
+manifest names it, while a manifest replaced within the grace period
+names it (a device that fetched that manifest just before the publish
+may still be downloading, or resolve a screen on demand later), and
+while the blob file itself is younger than the grace period (a publish
+in progress writes blobs first). Replaced manifests older than the grace
+period are deleted too. `--dry-run` lists what would go. Pick a grace
+period longer than your devices' update-check interval, run it where
+the store lives, and not concurrently with a slower publish. An
+unreadable manifest stops it before anything is deleted.
 
 ## Serving notes
 
@@ -161,6 +191,13 @@ You can also skip the plug entirely and serve the same layout from a
 static host, as long as something answers `POST /manifest` with the
 stored body.
 
+`mix mob_deliver.prune` works on `MobDeliverServer.Storage.FS` only. For
+other storage, apply the same rule (see
+`MobDeliverServer.Storage.FS.prune/2`): keep the previous manifest when
+you replace one, and delete a blob only when no current or recently
+replaced manifest names it and it's older than the grace period. A plain
+age-based bucket lifecycle rule would delete blobs still in use.
+
 ## Development
 
 ```bash
@@ -171,8 +208,10 @@ mix credo --strict
 mix compile --warnings-as-errors
 ```
 
-The interop tests use mob_deliver as a test-only path dependency, so
-clone it next to this repo (`~/code/mob_deliver`).
+`mix.exs` takes mob_deliver (the client, for the interop tests only)
+from Hex by default, or from the checkout at `MOB_DELIVER_PATH` to test
+against unreleased client changes. CI checks out mob_deliver's master
+and sets `MOB_DELIVER_PATH`.
 
 ## License
 

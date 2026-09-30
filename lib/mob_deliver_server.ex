@@ -75,9 +75,12 @@ defmodule MobDeliverServer do
     * `:private_key` (required) — key-file form, see
       `MobDeliverServer.Manifest`;
     * `:min_app_version` — lowest native app version the manifest
-      supports, e.g. `"1.4.0"`;
+      supports: dotted numeric, e.g. `"1.4.0"` (the form the client's
+      forced-update gate compares; anything else is rejected, since the
+      client would ignore it and leave the gate open);
     * `:force_update_after` — `DateTime` or ISO 8601 string; after it,
-      clients below `:min_app_version` must update from the store;
+      clients below `:min_app_version` must update from the store.
+      Requires `:min_app_version`: without a floor the client ignores it;
     * `:issued_at` — `DateTime` (default now); clients follow the
       newest `issued_at` for the forced-update gate;
     * `:storage` — `{module, config}` (default
@@ -110,6 +113,44 @@ defmodule MobDeliverServer do
       name -> ":" <> name
     end
   end
+
+  @doc """
+  Validates and normalises the forced-update fields of `publish/2`'s
+  options (`:min_app_version`, `:force_update_after`) without building or
+  writing anything, so a caller can fail before compiling.
+
+  Returns `{:ok, {min_app_version, force_update_after}}` (either may be
+  `nil`; the deadline as a UTC ISO 8601 string) or
+  `{:error, {:invalid, field, value}}` /
+  `{:error, {:force_update_after_without_min_app_version, deadline}}`.
+  """
+  @spec gate_fields(keyword()) ::
+          {:ok, {String.t() | nil, String.t() | nil}} | {:error, term()}
+  def gate_fields(opts) do
+    with {:ok, min_app_version} <- min_app_version(Keyword.get(opts, :min_app_version)),
+         {:ok, force_update_after} <-
+           datetime(:force_update_after, Keyword.get(opts, :force_update_after)) do
+      if force_update_after && is_nil(min_app_version),
+        do: {:error, {:force_update_after_without_min_app_version, force_update_after}},
+        else: {:ok, {min_app_version, force_update_after}}
+    end
+  end
+
+  @doc """
+  Whether `version` is a dotted numeric app version (`"1"`, `"1.4"`,
+  `"1.4.0"`): one or more `.`-separated runs of ASCII digits. Every such
+  string is comparable by the client's forced-update gate
+  (`MobDeliver.Gate`, missing segments count as 0); the gate leaves
+  itself open for anything it can't compare.
+  """
+  @spec valid_app_version?(term()) :: boolean()
+  def valid_app_version?(version) when is_binary(version) and version != "",
+    do: version |> :binary.split(".", [:global]) |> Enum.all?(&digits?/1)
+
+  def valid_app_version?(_), do: false
+
+  defp digits?(""), do: false
+  defp digits?(part), do: part |> :binary.bin_to_list() |> Enum.all?(&(&1 in ?0..?9))
 
   defp source_files(files) when is_list(files), do: files
 
@@ -190,9 +231,7 @@ defmodule MobDeliverServer do
          {:ok, modules} <- modules(build),
          {:ok, issued_at} <-
            datetime(:issued_at, Keyword.get_lazy(opts, :issued_at, &DateTime.utc_now/0)),
-         {:ok, force_update_after} <-
-           datetime(:force_update_after, Keyword.get(opts, :force_update_after)),
-         {:ok, min_app_version} <- min_app_version(Keyword.get(opts, :min_app_version)) do
+         {:ok, {min_app_version, force_update_after}} <- gate_fields(opts) do
       fields =
         %{
           "manifest_version" => 1,
@@ -241,8 +280,12 @@ defmodule MobDeliverServer do
   defp datetime(field, other), do: {:error, {:invalid, field, other}}
 
   defp min_app_version(nil), do: {:ok, nil}
-  defp min_app_version(version) when is_binary(version) and version != "", do: {:ok, version}
-  defp min_app_version(other), do: {:error, {:invalid, :min_app_version, other}}
+
+  defp min_app_version(version) do
+    if valid_app_version?(version),
+      do: {:ok, version},
+      else: {:error, {:invalid, :min_app_version, version}}
+  end
 
   defp put_blobs(build, storage_mod, storage_config) do
     build

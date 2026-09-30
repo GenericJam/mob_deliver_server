@@ -21,16 +21,24 @@ this repo reimplements it independently.
 * `lib/mob_deliver_server.ex` — `build/2` (ParallelCompiler into a temp
   dir, strip to `:beam_lib.significant_chunks/0` + `Attr`, SHA-256;
   unloads modules it newly loaded), `publish/2` (validate, blobs first,
-  signed manifest last), `module_key/1`.
+  signed manifest last), `gate_fields/1` + `valid_app_version?/1`
+  (`min_app_version` must be dotted digits: anything the client's
+  `MobDeliver.Gate.compare/2` couldn't compare is rejected), `module_key/1`.
 * `lib/mob_deliver_server/manifest.ex` — canonical JSON, `sign/2`, key
   file format (`ed25519-private:<base64 seed>`), `public_key_string/1`
   (client form `ed25519:<base64 public>`).
 * `lib/mob_deliver_server/storage.ex` — the behaviour (`put_blob/3`,
   `get_blob/2`, `put_manifest/4`, `get_manifest/3`) plus `valid_sha?/1`
-  and `valid_name?/1`. `storage/fs.ex` — the filesystem implementation.
+  and `valid_name?/1`. `storage/fs.ex` — the filesystem implementation;
+  `put_manifest/4` keeps the manifest it replaces under
+  `replaced/<app>/<channel>/`, which `FS.prune/2` needs to know which
+  dropped blobs devices may still fetch (grace period by mtime).
 * `lib/mob_deliver_server/plug.ex` — the two endpoints. Validates the
   SHA / app / channel before calling storage.
-* `lib/mix/tasks/` — `mob_deliver.gen.key`, `mob_deliver.publish`.
+* `lib/mix/tasks/` — `mob_deliver.gen.key`, `mob_deliver.publish`
+  (refuses a key that doesn't match the project's
+  `config :mob_deliver, :trusted_publish_key` without `--force`),
+  `mob_deliver.prune` (FS only).
 * `test/` — golden vector + escaping + >32-key ordering, sign/verify,
   build determinism (including a moved checkout), publish layout, plug
   status codes and headers, task behaviour, and `interop_test.exs`
@@ -39,9 +47,10 @@ this repo reimplements it independently.
 ## Rules
 
 1. **Never depend on mob_deliver at runtime.** Client and server are
-   peers across the wire (mob_deliver AGENTS.md rule 6). mob_deliver is a
-   `only: :test, runtime: false` path dep used solely by the interop
-   tests; nothing under `lib/` may reference `MobDeliver.*`.
+   peers across the wire (mob_deliver AGENTS.md rule 6). mob_deliver is
+   an `only: :test, runtime: false` dep (Hex, or the checkout at
+   `MOB_DELIVER_PATH`) used solely by the interop tests; nothing under
+   `lib/` may reference `MobDeliver.*`.
 2. **The signing payload is byte-for-byte contract.** Any change to
    `MobDeliverServer.Manifest` canonical encoding must keep the golden
    vector and the interop tests green. Maps are sorted explicitly — maps

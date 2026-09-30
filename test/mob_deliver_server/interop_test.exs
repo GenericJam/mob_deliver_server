@@ -122,4 +122,17 @@ defmodule MobDeliverServer.InteropTest do
     assert Client.fetch_manifest(Keyword.put(ctx.client_opts, :trusted_publish_key, other_key)) ==
              {:error, :invalid_signature}
   end
+
+  test "every min_app_version publish accepts is one the client's gate can compare" do
+    accepted = ~w(1 1.4 1.4.0 10.20.30 0.0.1 007.1 1.4.0.99)
+    # "+1" parses on the client (Integer.parse/1) but isn't a version anyone means.
+    rejected = ["", " 1", "1.", ".1", "1..2", "v1.4", "1.4-beta", "1.0-debug", "+1", "-1", "1,4"]
+
+    assert Enum.filter(accepted ++ rejected, &MobDeliverServer.valid_app_version?/1) == accepted
+
+    for version <- accepted do
+      assert MobDeliver.Gate.compare(version, version) == {:ok, :eq}
+      assert MobDeliver.Gate.compare(version, "999") == {:ok, :lt}
+    end
+  end
 end

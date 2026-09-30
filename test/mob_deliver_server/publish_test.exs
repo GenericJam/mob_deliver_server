@@ -81,8 +81,23 @@ defmodule MobDeliverServer.PublishTest do
     assert {:error, {:invalid, :build, "A"}} =
              MobDeliverServer.publish(%{"A" => {sha, "other bytes"}}, good)
 
-    assert {:error, {:invalid, :min_app_version, ""}} =
-             MobDeliverServer.publish(build, Keyword.put(good, :min_app_version, ""))
+    for version <- ["", "1.4-beta", "v1.4", "1..2", "1.0-debug", 140] do
+      assert {:error, {:invalid, :min_app_version, ^version}} =
+               MobDeliverServer.publish(build, Keyword.put(good, :min_app_version, version))
+    end
+
+    assert {:error, {:invalid, :force_update_after, "next tuesday"}} =
+             MobDeliverServer.publish(
+               build,
+               good ++ [min_app_version: "1.4.0", force_update_after: "next tuesday"]
+             )
+
+    # Without a floor the client ignores the deadline.
+    assert {:error, {:force_update_after_without_min_app_version, "2026-10-19T00:00:00Z"}} =
+             MobDeliverServer.publish(
+               build,
+               Keyword.put(good, :force_update_after, "2026-10-19T00:00:00Z")
+             )
 
     assert {:error, {:invalid, :app, "../etc"}} =
              MobDeliverServer.publish(build, Keyword.put(good, :app, "../etc"))
