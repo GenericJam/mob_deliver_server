@@ -1,8 +1,8 @@
 name: tests
 
 # CI for mob_deliver_server — the same gate as mob_deliver. The interop
-# tests use mob_deliver as a test-only path dep (../mob_deliver), so the
-# client repo is checked out next to this one.
+# tests run against mob_deliver's master (checked out next to this repo via
+# MOB_DELIVER_PATH), so wire drift shows up before either side releases.
 
 on:
   push:
@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MIX_ENV: test
+      MOB_DELIVER_PATH: ../mob_deliver
     defaults:
       run:
         working-directory: mob_deliver_server

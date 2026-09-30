@@ -58,8 +58,9 @@ defmodule MobDeliverServer.MixProject do
       # Interop tests only: the real client verifies and fetches what this
       # server publishes. Never a runtime dep (AGENTS.md rule 1), and
       # `runtime: false` so its application (on-device store, poller) never
-      # starts in the test VM.
-      {:mob_deliver, path: "../mob_deliver", only: :test, runtime: false},
+      # starts in the test VM. MOB_DELIVER_PATH=../mob_deliver tests against
+      # an unreleased client checkout.
+      mob_deliver_dep(),
       # Code quality — Credo + ex_slop (AI-pattern checks) + jump_credo_checks,
       # mirroring mob_deliver's gate.
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
@@ -68,5 +69,12 @@ defmodule MobDeliverServer.MixProject do
       # Docs.
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}
     ]
+  end
+
+  defp mob_deliver_dep do
+    case System.get_env("MOB_DELIVER_PATH") do
+      nil -> {:mob_deliver, "~> 0.1", only: :test, runtime: false}
+      path -> {:mob_deliver, path: path, only: :test, runtime: false}
+    end
   end
 end

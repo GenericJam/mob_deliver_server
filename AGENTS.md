@@ -65,8 +65,9 @@ this repo reimplements it independently.
 mix format
 mix credo --strict   # ExSlop + jump_credo_checks
 mix compile --warnings-as-errors
-mix test             # needs ../mob_deliver checked out
+mix test             # client from Hex; MOB_DELIVER_PATH=../mob_deliver for a checkout
 ```
 
-Git-local for now (no GitHub remote yet); CI config in
-`.github/workflows/test.yml` checks out mob_deliver alongside.
+CI (`.github/workflows/test.yml`) checks out mob_deliver's master alongside
+and sets `MOB_DELIVER_PATH`; `release.yml` publishes to Hex on a
+`mix.exs` version bump.
