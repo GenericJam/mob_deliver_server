@@ -3,7 +3,7 @@
 Reference server for [mob_deliver](https://github.com/GenericJam/mob_deliver) —
 content-addressed BEAM delivery for [Mob](https://hexdocs.pm/mob) apps.
 
-> **Status: v0.1.** Implements wire format v1 as
+> **Status: v0.2.** Implements wire format v1 as
 > pinned in mob_deliver's
 > [`decisions/2026-09-19-scope-and-wire-format.md`](https://github.com/GenericJam/mob_deliver/blob/master/decisions/2026-09-19-scope-and-wire-format.md).
 

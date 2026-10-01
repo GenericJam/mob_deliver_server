@@ -6,7 +6,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ---
 
-## [Unreleased]
+## [0.2.0] - 2026-09-30
 
 ### Added
 - `mix mob_deliver.prune` and `MobDeliverServer.Storage.FS.prune/2` —
