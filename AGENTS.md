@@ -10,7 +10,8 @@ signs a manifest, stores both, and serves them over wire format v1.
 — sections "Wire format v1", "Manifest signing", "Forced-update window",
 "Phoenix-native server layout". The client is the reference for the
 canonical signing payload (`MobDeliver.Manifest.signing_payload/1`);
-this repo reimplements it independently.
+this repo reimplements it independently. Everything wire-adjacent defers
+to that ADR.
 
 > **Keep this file current.** When you change the storage layout, the
 > build pipeline, or hit a gotcha that would trip the next agent, fix it
@@ -79,4 +80,4 @@ mix test             # client from Hex; MOB_DELIVER_PATH=../mob_deliver for a ch
 
 CI (`.github/workflows/test.yml`) checks out mob_deliver's master alongside
 and sets `MOB_DELIVER_PATH`; `release.yml` publishes to Hex on a
-`mix.exs` version bump.
+`mix.exs` version bump. Do NOT bump versions without explicit permission.
