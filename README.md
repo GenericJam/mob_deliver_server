@@ -204,7 +204,7 @@ age-based bucket lifecycle rule would delete blobs still in use.
 
 ## Static hosting (no server)
 
-mob_deliver releases after 0.4.0 can fetch the manifest file directly
+mob_deliver releases after 0.4.0 ([GenericJam/mob_deliver#6](https://github.com/GenericJam/mob_deliver/pull/6)) can fetch the manifest file directly
 (`config :mob_deliver, endpoint_type: :static`: `GET
 <endpoint>/manifests/<app>/<channel>.json`), so you can skip the plug and
 serve the publish directory as it is from any static host, e.g. a

@@ -170,5 +170,42 @@ defmodule MobDeliverServer.PublishTest do
       assert MobDeliverServer.publish(TestHelpers.fake_build(["A"]), opts) ==
                {:error, :unreadable_current_manifest}
     end
+
+    test "a publish that lands while this one uploads its blobs is still replaced by a later one",
+         %{tmp_dir: tmp_dir, private: private} do
+      future = DateTime.utc_now() |> DateTime.add(3600) |> DateTime.truncate(:second)
+      landed = JSON.encode!(%{"issued_at" => DateTime.to_iso8601(future)})
+
+      {:ok, %{fields: fields}} =
+        MobDeliverServer.publish(TestHelpers.fake_build(["A"]),
+          app: "app",
+          channel: "production",
+          private_key: private,
+          storage: {__MODULE__.Overlap, root: tmp_dir, land: landed}
+        )
+
+      assert fields["issued_at"] == future |> DateTime.add(1) |> DateTime.to_iso8601()
+    end
+  end
+
+  defmodule Overlap do
+    @moduledoc false
+    # Storage.FS where another publish's manifest lands during the blob upload.
+    @behaviour MobDeliverServer.Storage
+
+    alias MobDeliverServer.Storage.FS
+
+    @impl true
+    def put_blob(config, sha, beam) do
+      :ok = FS.put_manifest(config, "app", "production", config[:land])
+      FS.put_blob(config, sha, beam)
+    end
+
+    @impl true
+    defdelegate get_blob(config, sha), to: FS
+    @impl true
+    defdelegate put_manifest(config, app, channel, body), to: FS
+    @impl true
+    defdelegate get_manifest(config, app, channel), to: FS
   end
 end

@@ -95,12 +95,18 @@ defmodule MobDeliverServer do
   @spec publish(build(), keyword()) :: {:ok, published()} | {:error, term()}
   def publish(build, opts) when is_map(build) do
     {storage_mod, storage_config} = Keyword.get(opts, :storage, @default_storage)
+    explicit? = Keyword.has_key?(opts, :issued_at)
 
+    # Checked before anything is written (an explicit issued_at that isn't
+    # later fails fast) and again after the blob uploads, which can be slow:
+    # a publish that overlapped this one may have replaced the manifest
+    # meanwhile. Storage has no compare-and-swap, so the window left is
+    # between that read and the manifest write.
     with {:ok, fields} <- manifest_fields(build, opts),
-         {:ok, fields} <-
-           after_current(fields, Keyword.has_key?(opts, :issued_at), storage_mod, storage_config),
+         {:ok, fields} <- after_current(fields, explicit?, storage_mod, storage_config),
          {:ok, _seed} <- Manifest.decode_private_key(Keyword.fetch!(opts, :private_key)),
-         :ok <- put_blobs(build, storage_mod, storage_config) do
+         :ok <- put_blobs(build, storage_mod, storage_config),
+         {:ok, fields} <- after_current(fields, explicit?, storage_mod, storage_config) do
       body = Manifest.sign(fields, Keyword.fetch!(opts, :private_key))
 
       case storage_mod.put_manifest(storage_config, fields["app"], fields["channel"], body) do
