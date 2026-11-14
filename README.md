@@ -98,6 +98,13 @@ it — every device built from that config would reject the manifest.
 `--force` publishes anyway (e.g. for devices on an older build during a
 key rotation). Projects without that setting aren't checked.
 
+Each publish is dated after the manifest it replaces: devices refuse a
+manifest that isn't newer than the newest they've verified (mob_deliver's
+replay floor), so when the clock isn't already later — two publishes in
+one second, or a replaced manifest dated in the future — the new
+`issued_at` is one second after the replaced one. `publish/2` with an
+explicit `:issued_at` that isn't later is refused.
+
 Blobs are written before the manifest, and every write is
 temp-file + rename, so a running server never serves a manifest whose
 BEAMs are missing or a half-written file. The manifest a publish
@@ -187,9 +194,6 @@ forward "/deliver", MobDeliverServer.Plug, storage: {MyApp.S3Storage, bucket: "d
 ```
 
 A manifest replace must be atomic from a reader's view (S3 `PUT` is).
-You can also skip the plug entirely and serve the same layout from a
-static host, as long as something answers `POST /manifest` with the
-stored body.
 
 `mix mob_deliver.prune` works on `MobDeliverServer.Storage.FS` only. For
 other storage, apply the same rule (see
@@ -197,6 +201,26 @@ other storage, apply the same rule (see
 you replace one, and delete a blob only when no current or recently
 replaced manifest names it and it's older than the grace period. A plain
 age-based bucket lifecycle rule would delete blobs still in use.
+
+## Static hosting (no server)
+
+mob_deliver releases after 0.4.0 can fetch the manifest file directly
+(`config :mob_deliver, endpoint_type: :static`: `GET
+<endpoint>/manifests/<app>/<channel>.json`), so you can skip the plug and
+serve the publish directory as it is from any static host, e.g. a
+`gh-pages` branch on GitHub Pages:
+
+```bash
+mix mob_deliver.publish --app com.example.myapp --channel production --out ../site/ota
+git -C ../site add -A ota && git -C ../site commit -m "OTA publish" && git -C ../site push
+```
+
+Publish into the same directory every time (old blobs stay published for
+devices still on an older manifest; prune them with `mob_deliver.prune`),
+and let the host's cache lifetime pass before expecting every device to
+see the publish (ten minutes on GitHub Pages; a device that already saw
+the newer manifest refuses a stale copy). The `replaced/` directory is
+only for `mob_deliver.prune`; publishing it is harmless.
 
 ## Development
 

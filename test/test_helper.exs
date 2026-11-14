@@ -62,4 +62,11 @@ defmodule MobDeliverServer.RecordingStorage do
   end
 end
 
-ExUnit.start()
+# The client's static mode (`endpoint_type: :static`) is newer than the
+# mob_deliver on Hex this suite pins; run its interop test against a
+# checkout that has it (MOB_DELIVER_PATH=../mob_deliver).
+static_endpoint? =
+  Code.ensure_loaded?(MobDeliver.Config) and
+    function_exported?(MobDeliver.Config, :endpoint_type, 0)
+
+ExUnit.start(exclude: if(static_endpoint?, do: [], else: [:static_endpoint]))

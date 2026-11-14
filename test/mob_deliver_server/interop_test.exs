@@ -123,6 +123,40 @@ defmodule MobDeliverServer.InteropTest do
              {:error, :invalid_signature}
   end
 
+  # The publish directory served as plain files, as GitHub Pages would: GET
+  # only, the FS layout as it is. Needs a mob_deliver with
+  # `endpoint_type: :static` (excluded otherwise, see test_helper.exs).
+  @tag :static_endpoint
+  test "the client's static mode reads the publish directory as it is", ctx do
+    {FS, root: root} = ctx.storage
+
+    files = fn
+      %Plug.Conn{method: "GET", path_info: ["ota" | rest]} = conn ->
+        case File.read(Path.join([root | rest])) do
+          {:ok, bytes} -> Plug.Conn.send_resp(conn, 200, bytes)
+          {:error, _} -> Plug.Conn.send_resp(conn, 404, "")
+        end
+
+      conn ->
+        Plug.Conn.send_resp(conn, 405, "")
+    end
+
+    opts =
+      Keyword.merge(ctx.client_opts,
+        endpoint: "https://example.github.io/ota",
+        endpoint_type: :static,
+        req_options: [plug: files]
+      )
+
+    assert {:ok, manifest, body} = Client.fetch_manifest(opts)
+    assert body == ctx.published.body
+
+    for {_key, sha} <- Enum.take(manifest.modules, 3) do
+      {^sha, beam} = Enum.find_value(ctx.build, fn {_, {s, b}} -> s == sha && {s, b} end)
+      assert Client.fetch_beam(sha, opts) == {:ok, beam}
+    end
+  end
+
   test "every min_app_version publish accepts is one the client's gate can compare" do
     accepted = ~w(1 1.4 1.4.0 10.20.30 0.0.1 007.1 1.4.0.99)
     # "+1" parses on the client (Integer.parse/1) but isn't a version anyone means.
