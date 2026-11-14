@@ -7,6 +7,7 @@ defmodule MobDeliverServer.Storage.FS do
       beam/<sha>                              raw .beam bytes
       manifests/<app>/<channel>.json          signed manifest body
       replaced/<app>/<channel>/<ms>-<id>.json manifests replaced by a publish
+      .locks/<app>/<channel>                  while a publish runs (`lock/4`)
 
   Every write goes to a temp file in the target directory, is fsynced,
   then renamed over the target, so a concurrent reader (the plug) sees
@@ -17,6 +18,12 @@ defmodule MobDeliverServer.Storage.FS do
   `prune/2` knows which blobs a device may still be fetching for a
   manifest it got just before the publish. Nothing else reads it, and
   `prune/2` deletes entries older than its grace period.
+
+  `lock/4` creates its lock file exclusively, so publishes to one app +
+  channel from any process sharing `root` never overlap: the second gets
+  `{:error, {:locked, path}}`. A publisher killed mid-publish leaves the
+  file behind (it names the OS process and node that made it); remove it
+  once that process is gone.
   """
 
   @behaviour MobDeliverServer.Storage
@@ -61,6 +68,36 @@ defmodule MobDeliverServer.Storage.FS do
       do: read(manifest_path(config, app, channel)),
       else: {:error, :invalid_name}
   end
+
+  @impl true
+  def lock(config, app, channel, fun) when is_function(fun, 0) do
+    if valid_names?(app, channel) do
+      path = Path.join([root(config), ".locks", app, channel])
+
+      with :ok <- mkdir_p(Path.dirname(path)) do
+        case File.open(path, [:write, :exclusive], &IO.write(&1, lock_owner())) do
+          {:ok, :ok} ->
+            try do
+              fun.()
+            after
+              File.rm(path)
+            end
+
+          {:error, :eexist} ->
+            {:error, {:locked, path}}
+
+          {:error, reason} ->
+            {:error, {:lock, path, reason}}
+        end
+      end
+    else
+      {:error, :invalid_name}
+    end
+  end
+
+  defp lock_owner,
+    do:
+      "os_pid=#{System.pid()} node=#{node()} since=#{DateTime.utc_now() |> DateTime.to_iso8601()}\n"
 
   @doc """
   Deletes blobs no manifest under `root` references, once they're old

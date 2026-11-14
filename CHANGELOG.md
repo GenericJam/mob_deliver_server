@@ -6,6 +6,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ---
 
+## [Unreleased]
+
+### Changed
+- A publish is dated after the manifest it replaces (MOB-486). mob_deliver
+  devices refuse a manifest that isn't newer than the newest they've
+  verified, so two publishes in one second, or one after a publish dated
+  in the future, would have been refused by every device that saw the
+  previous one. The new `issued_at` is now one second after the replaced
+  manifest's when the clock isn't already later; an explicit
+  `:issued_at` that isn't later is `{:error,
+  {:issued_at_not_after_current, issued_at, current}}`, and a replaced
+  manifest without a readable `issued_at` stops the publish.
+- A publish reads the manifest it replaces, writes its blobs and its
+  manifest under the storage's new optional `lock/4` callback.
+  `Storage.FS` implements it with an exclusive lock file
+  (`.locks/<app>/<channel>`): an overlapping publish to the same channel
+  is `{:error, {:locked, path}}` instead of racing to an older-dated
+  current manifest. Storage without `lock/4` must serialise publishes.
+- `issued_at: nil` is `{:error, {:invalid, :issued_at, nil}}` (it used to
+  publish a manifest without one, or raise).
+
+### Added
+- README: static hosting (GitHub Pages, a bucket) for mob_deliver's
+  `endpoint_type: :static`: the publish directory served as it is, what
+  that makes public, and to deploy only `manifests/` and `beam/`.
+- CI: a leg against mob_deliver#6 that requires the static interop test.
+
 ## [0.2.0] - 2026-09-30
 
 ### Added

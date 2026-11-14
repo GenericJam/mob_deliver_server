@@ -16,11 +16,12 @@ concurrency:
 
 jobs:
   test:
-    name: Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }}
+    name: Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }}${{ matrix.mob_deliver_ref && format(' / mob_deliver {0}', matrix.mob_deliver_ref) || '' }}
     runs-on: ubuntu-latest
     env:
       MIX_ENV: test
       MOB_DELIVER_PATH: ../mob_deliver
+      REQUIRE_STATIC_ENDPOINT: ${{ matrix.require_static_endpoint }}
     defaults:
       run:
         working-directory: mob_deliver_server
@@ -30,6 +31,13 @@ jobs:
         include:
           - elixir: '1.19'
             otp: '28'
+          # mob_deliver's static mode (GenericJam/mob_deliver#6) isn't on its
+          # master yet: run the :static_endpoint interop test against the PR
+          # and fail if it got excluded. Drop this leg once #6 is merged.
+          - elixir: '1.19'
+            otp: '28'
+            mob_deliver_ref: refs/pull/6/head
+            require_static_endpoint: '1'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,6 +46,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: GenericJam/mob_deliver
+          ref: ${{ matrix.mob_deliver_ref }}
           path: mob_deliver
 
       - uses: erlef/setup-beam@v1
@@ -51,8 +60,8 @@ jobs:
           path: |
             mob_deliver_server/deps
             mob_deliver_server/_build
-          key: mix-${{ runner.os }}-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('mob_deliver_server/mix.lock') }}
-          restore-keys: mix-${{ runner.os }}-${{ matrix.elixir }}-${{ matrix.otp }}-
+          key: mix-${{ runner.os }}-${{ matrix.elixir }}-${{ matrix.otp }}-${{ matrix.mob_deliver_ref }}-${{ hashFiles('mob_deliver_server/mix.lock') }}
+          restore-keys: mix-${{ runner.os }}-${{ matrix.elixir }}-${{ matrix.otp }}-${{ matrix.mob_deliver_ref }}-
 
       - run: mix deps.get
       - run: mix deps.compile

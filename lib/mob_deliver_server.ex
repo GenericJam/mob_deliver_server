@@ -82,23 +82,94 @@ defmodule MobDeliverServer do
       clients below `:min_app_version` must update from the store.
       Requires `:min_app_version`: without a floor the client ignores it;
     * `:issued_at` — `DateTime` (default now); clients follow the
-      newest `issued_at` for the forced-update gate;
+      newest `issued_at` for the forced-update gate, and refuse a
+      manifest that isn't newer than the newest they have verified (the
+      replay floor). So a publish is always dated after the manifest it
+      replaces: by default one second after it when the clock isn't
+      already later (two publishes in one second, or a replaced manifest
+      dated in the future); an explicit `:issued_at` that isn't later is
+      `{:error, {:issued_at_not_after_current, issued_at, current}}`;
     * `:storage` — `{module, config}` (default
       `{MobDeliverServer.Storage.FS, root: "mob_deliver_publish"}`).
+
+  The read of the manifest being replaced, the blob uploads and the
+  manifest write run under the storage's `lock/4`
+  (`MobDeliverServer.Storage`), so a publish that overlaps another to the
+  same app + channel fails with `{:error, {:locked, detail}}` instead of
+  racing it. Storage without `lock/4` must be serialised by the caller.
   """
   @spec publish(build(), keyword()) :: {:ok, published()} | {:error, term()}
   def publish(build, opts) when is_map(build) do
     {storage_mod, storage_config} = Keyword.get(opts, :storage, @default_storage)
+    explicit? = Keyword.has_key?(opts, :issued_at)
 
     with {:ok, fields} <- manifest_fields(build, opts),
-         {:ok, _seed} <- Manifest.decode_private_key(Keyword.fetch!(opts, :private_key)),
-         :ok <- put_blobs(build, storage_mod, storage_config) do
-      body = Manifest.sign(fields, Keyword.fetch!(opts, :private_key))
+         {:ok, _seed} <- Manifest.decode_private_key(Keyword.fetch!(opts, :private_key)) do
+      locked(storage_mod, storage_config, fields, fn ->
+        # Checked before anything is written (an explicit issued_at that
+        # isn't later fails fast) and again after the blob uploads, for
+        # storage without lock/4, where another publish may have replaced
+        # the manifest meanwhile.
+        with {:ok, fields} <- after_current(fields, explicit?, storage_mod, storage_config),
+             :ok <- put_blobs(build, storage_mod, storage_config),
+             {:ok, fields} <- after_current(fields, explicit?, storage_mod, storage_config) do
+          body = Manifest.sign(fields, Keyword.fetch!(opts, :private_key))
 
-      case storage_mod.put_manifest(storage_config, fields["app"], fields["channel"], body) do
-        :ok -> {:ok, %{body: body, fields: fields}}
-        {:error, reason} -> {:error, {:put_manifest, reason}}
-      end
+          case storage_mod.put_manifest(storage_config, fields["app"], fields["channel"], body) do
+            :ok -> {:ok, %{body: body, fields: fields}}
+            {:error, reason} -> {:error, {:put_manifest, reason}}
+          end
+        end
+      end)
+    end
+  end
+
+  defp locked(storage_mod, config, fields, fun) do
+    Code.ensure_loaded(storage_mod)
+
+    if function_exported?(storage_mod, :lock, 4),
+      do: storage_mod.lock(config, fields["app"], fields["channel"], fun),
+      else: fun.()
+  end
+
+  # mob_deliver devices never use a manifest that isn't newer than the
+  # newest one they've verified (its replay floor), so a publish dated at or
+  # before the one it replaces would be refused by every device that saw
+  # that one.
+  defp after_current(fields, explicit?, storage_mod, config) do
+    case storage_mod.get_manifest(config, fields["app"], fields["channel"]) do
+      {:ok, body} ->
+        with {:ok, current} <- current_issued_at(body) do
+          {:ok, issued_at, 0} = DateTime.from_iso8601(fields["issued_at"])
+
+          cond do
+            DateTime.after?(issued_at, current) ->
+              {:ok, fields}
+
+            explicit? ->
+              {:error,
+               {:issued_at_not_after_current, fields["issued_at"], DateTime.to_iso8601(current)}}
+
+            true ->
+              {:ok,
+               %{fields | "issued_at" => current |> DateTime.add(1) |> DateTime.to_iso8601()}}
+          end
+        end
+
+      {:error, :not_found} ->
+        {:ok, fields}
+
+      {:error, reason} ->
+        {:error, {:get_manifest, reason}}
+    end
+  end
+
+  defp current_issued_at(body) do
+    with {:ok, %{"issued_at" => iso}} when is_binary(iso) <- JSON.decode(body),
+         {:ok, datetime, _offset} <- DateTime.from_iso8601(iso) do
+      {:ok, datetime |> DateTime.shift_zone!("Etc/UTC") |> DateTime.truncate(:second)}
+    else
+      _ -> {:error, :unreadable_current_manifest}
     end
   end
 
@@ -229,8 +300,7 @@ defmodule MobDeliverServer do
     with :ok <- check_name(:app, app),
          :ok <- check_name(:channel, channel),
          {:ok, modules} <- modules(build),
-         {:ok, issued_at} <-
-           datetime(:issued_at, Keyword.get_lazy(opts, :issued_at, &DateTime.utc_now/0)),
+         {:ok, issued_at} <- issued_at(opts),
          {:ok, {min_app_version, force_update_after}} <- gate_fields(opts) do
       fields =
         %{
@@ -245,6 +315,14 @@ defmodule MobDeliverServer do
         |> Map.reject(fn {_, value} -> is_nil(value) end)
 
       {:ok, fields}
+    end
+  end
+
+  # required: unlike the optional force_update_after, nil isn't "absent"
+  defp issued_at(opts) do
+    case Keyword.get_lazy(opts, :issued_at, &DateTime.utc_now/0) do
+      nil -> {:error, {:invalid, :issued_at, nil}}
+      issued_at -> datetime(:issued_at, issued_at)
     end
   end
 
