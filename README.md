@@ -154,7 +154,7 @@ unreadable manifest stops it before anything is deleted.
 ## Roll-your-own storage (S3, GCS, …)
 
 No cloud SDKs are bundled. Implement the `MobDeliverServer.Storage`
-behaviour — four callbacks — with your client of choice:
+behaviour — four callbacks, plus an optional `lock/4` — with your client of choice:
 
 ```elixir
 defmodule MyApp.S3Storage do
@@ -194,6 +194,10 @@ forward "/deliver", MobDeliverServer.Plug, storage: {MyApp.S3Storage, bucket: "d
 ```
 
 A manifest replace must be atomic from a reader's view (S3 `PUT` is).
+Without `lock/4`, run one publish per app + channel at a time (one
+publisher, or a lock of your own around `publish/2`): two overlapping
+publishes can leave the older-dated manifest current, which devices that
+saw the newer one refuse.
 
 `mix mob_deliver.prune` works on `MobDeliverServer.Storage.FS` only. For
 other storage, apply the same rule (see
@@ -212,15 +216,42 @@ serve the publish directory as it is from any static host, e.g. a
 
 ```bash
 mix mob_deliver.publish --app com.example.myapp --channel production --out ../site/ota
-git -C ../site add -A ota && git -C ../site commit -m "OTA publish" && git -C ../site push
+git -C ../site add -A ota/manifests ota/beam && git -C ../site commit -m "OTA publish" && git -C ../site push
 ```
 
 Publish into the same directory every time (old blobs stay published for
 devices still on an older manifest; prune them with `mob_deliver.prune`),
 and let the host's cache lifetime pass before expecting every device to
 see the publish (ten minutes on GitHub Pages; a device that already saw
-the newer manifest refuses a stale copy). The `replaced/` directory is
-only for `mob_deliver.prune`; publishing it is harmless.
+the newer manifest refuses a stale copy).
+
+Deploy only `manifests/` and `beam/`: keep `replaced/` (the previous
+manifests `mob_deliver.prune` needs) and `.locks/` (a publish in
+progress) in the publish directory but out of the deployed tree, e.g. in
+the site's `.gitignore`.
+
+What a static host makes public:
+
+- **Everything deployed is world-readable**: the BEAMs (your Elixir code,
+  without docs or debug info) and the manifests (module names, versions,
+  rollout dates). Ship nothing over the air you wouldn't put in the app.
+- **Old manifests stay usable.** They're signed, and a CDN or anyone on
+  the network can serve an old one. A device refuses a manifest that
+  isn't newer than the newest it has verified (mob_deliver's replay
+  floor), but one that has verified nothing newer on that channel (a
+  fresh install, a new channel) accepts any manifest you ever signed for
+  it. Only code you signed can load, but it may be an older publish. On a
+  git-backed host the branch history keeps every manifest regardless.
+- **Prune with a grace period longer than** the host's cache lifetime plus
+  the longest a device takes between reading a manifest and fetching its
+  blobs (`mob_deliver.prune`'s default is 7 days); otherwise a device
+  holding a stale manifest finds its blobs gone and the install fails
+  (it retries later; nothing wrong loads).
+- **One publisher at a time per channel.** `Storage.FS` locks the channel
+  for the length of a publish (`.locks/`), which covers publishers
+  sharing that directory; publishers on different machines that push to
+  the same branch are serialised by the push (a rejected non-fast-forward
+  push: pull, then publish again).
 
 ## Development
 

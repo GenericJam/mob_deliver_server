@@ -91,29 +91,45 @@ defmodule MobDeliverServer do
       `{:error, {:issued_at_not_after_current, issued_at, current}}`;
     * `:storage` — `{module, config}` (default
       `{MobDeliverServer.Storage.FS, root: "mob_deliver_publish"}`).
+
+  The read of the manifest being replaced, the blob uploads and the
+  manifest write run under the storage's `lock/4`
+  (`MobDeliverServer.Storage`), so a publish that overlaps another to the
+  same app + channel fails with `{:error, {:locked, detail}}` instead of
+  racing it. Storage without `lock/4` must be serialised by the caller.
   """
   @spec publish(build(), keyword()) :: {:ok, published()} | {:error, term()}
   def publish(build, opts) when is_map(build) do
     {storage_mod, storage_config} = Keyword.get(opts, :storage, @default_storage)
     explicit? = Keyword.has_key?(opts, :issued_at)
 
-    # Checked before anything is written (an explicit issued_at that isn't
-    # later fails fast) and again after the blob uploads, which can be slow:
-    # a publish that overlapped this one may have replaced the manifest
-    # meanwhile. Storage has no compare-and-swap, so the window left is
-    # between that read and the manifest write.
     with {:ok, fields} <- manifest_fields(build, opts),
-         {:ok, fields} <- after_current(fields, explicit?, storage_mod, storage_config),
-         {:ok, _seed} <- Manifest.decode_private_key(Keyword.fetch!(opts, :private_key)),
-         :ok <- put_blobs(build, storage_mod, storage_config),
-         {:ok, fields} <- after_current(fields, explicit?, storage_mod, storage_config) do
-      body = Manifest.sign(fields, Keyword.fetch!(opts, :private_key))
+         {:ok, _seed} <- Manifest.decode_private_key(Keyword.fetch!(opts, :private_key)) do
+      locked(storage_mod, storage_config, fields, fn ->
+        # Checked before anything is written (an explicit issued_at that
+        # isn't later fails fast) and again after the blob uploads, for
+        # storage without lock/4, where another publish may have replaced
+        # the manifest meanwhile.
+        with {:ok, fields} <- after_current(fields, explicit?, storage_mod, storage_config),
+             :ok <- put_blobs(build, storage_mod, storage_config),
+             {:ok, fields} <- after_current(fields, explicit?, storage_mod, storage_config) do
+          body = Manifest.sign(fields, Keyword.fetch!(opts, :private_key))
 
-      case storage_mod.put_manifest(storage_config, fields["app"], fields["channel"], body) do
-        :ok -> {:ok, %{body: body, fields: fields}}
-        {:error, reason} -> {:error, {:put_manifest, reason}}
-      end
+          case storage_mod.put_manifest(storage_config, fields["app"], fields["channel"], body) do
+            :ok -> {:ok, %{body: body, fields: fields}}
+            {:error, reason} -> {:error, {:put_manifest, reason}}
+          end
+        end
+      end)
     end
+  end
+
+  defp locked(storage_mod, config, fields, fun) do
+    Code.ensure_loaded(storage_mod)
+
+    if function_exported?(storage_mod, :lock, 4),
+      do: storage_mod.lock(config, fields["app"], fields["channel"], fun),
+      else: fun.()
   end
 
   # mob_deliver devices never use a manifest that isn't newer than the
@@ -284,8 +300,7 @@ defmodule MobDeliverServer do
     with :ok <- check_name(:app, app),
          :ok <- check_name(:channel, channel),
          {:ok, modules} <- modules(build),
-         {:ok, issued_at} <-
-           datetime(:issued_at, Keyword.get_lazy(opts, :issued_at, &DateTime.utc_now/0)),
+         {:ok, issued_at} <- issued_at(opts),
          {:ok, {min_app_version, force_update_after}} <- gate_fields(opts) do
       fields =
         %{
@@ -300,6 +315,14 @@ defmodule MobDeliverServer do
         |> Map.reject(fn {_, value} -> is_nil(value) end)
 
       {:ok, fields}
+    end
+  end
+
+  # required: unlike the optional force_update_after, nil isn't "absent"
+  defp issued_at(opts) do
+    case Keyword.get_lazy(opts, :issued_at, &DateTime.utc_now/0) do
+      nil -> {:error, {:invalid, :issued_at, nil}}
+      issued_at -> datetime(:issued_at, issued_at)
     end
   end
 

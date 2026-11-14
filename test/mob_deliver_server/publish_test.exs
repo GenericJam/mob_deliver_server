@@ -186,6 +186,60 @@ defmodule MobDeliverServer.PublishTest do
 
       assert fields["issued_at"] == future |> DateTime.add(1) |> DateTime.to_iso8601()
     end
+
+    test "a publish that overlaps one to the same channel is refused, and the lock is freed after",
+         %{opts: opts, tmp_dir: tmp_dir} do
+      storage = {__MODULE__.Nested, root: tmp_dir, pid: self(), opts: opts}
+
+      {:ok, %{fields: first}} =
+        MobDeliverServer.publish(
+          TestHelpers.fake_build(["A"]),
+          Keyword.put(opts, :storage, storage)
+        )
+
+      assert_received {:nested, {:error, {:locked, lock}}}
+      assert lock == Path.join([tmp_dir, ".locks", "app", "production"])
+      refute File.exists?(lock)
+
+      {:ok, current} = FS.get_manifest([root: tmp_dir], "app", "production")
+      assert JSON.decode!(current)["issued_at"] == first["issued_at"]
+
+      assert issued_at(TestHelpers.fake_build(["C"]), opts) > first["issued_at"]
+    end
+
+    test "issued_at: nil is refused", %{opts: opts} do
+      nil_at = Keyword.put(opts, :issued_at, nil)
+      refused = {:error, {:invalid, :issued_at, nil}}
+      assert MobDeliverServer.publish(TestHelpers.fake_build(["A"]), nil_at) == refused
+
+      issued_at(TestHelpers.fake_build(["A"]), opts)
+      assert MobDeliverServer.publish(TestHelpers.fake_build(["B"]), nil_at) == refused
+    end
+  end
+
+  defmodule Nested do
+    @moduledoc false
+    # Storage.FS where another publish to the same channel starts while this
+    # one uploads its blobs; its result goes to config[:pid].
+    @behaviour MobDeliverServer.Storage
+
+    alias MobDeliverServer.Storage.FS
+
+    @impl true
+    def put_blob(config, sha, beam) do
+      nested = MobDeliverServer.publish(TestHelpers.fake_build(["B"]), config[:opts])
+      send(config[:pid], {:nested, nested})
+      FS.put_blob(config, sha, beam)
+    end
+
+    @impl true
+    defdelegate get_blob(config, sha), to: FS
+    @impl true
+    defdelegate put_manifest(config, app, channel, body), to: FS
+    @impl true
+    defdelegate get_manifest(config, app, channel), to: FS
+    @impl true
+    defdelegate lock(config, app, channel, fun), to: FS
   end
 
   defmodule Overlap do

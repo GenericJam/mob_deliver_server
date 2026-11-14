@@ -5,7 +5,8 @@ defmodule MobDeliverServer.Storage do
   A storage is a `{module, config}` pair; `module` implements this
   behaviour and receives `config` as the first argument of every
   callback. `MobDeliverServer.Storage.FS` ships with the library. S3, GCS
-  or a database are roll-your-own: implement the four callbacks with
+  or a database are roll-your-own: implement the four callbacks (and
+  optionally `lock/4`) with
   your cloud client of choice and pass `{MyApp.S3Storage, bucket: ...}`
   to `MobDeliverServer.publish/2` and `MobDeliverServer.Plug`.
 
@@ -23,6 +24,16 @@ defmodule MobDeliverServer.Storage do
     * Callers validate `sha` with `valid_sha?/1` and `app`/`channel` with
       `valid_name?/1` before calling in; implementations that build paths
       or object keys from them should check again rather than trust it.
+    * `lock/4` (optional) runs `fun` while no other publish to `app` +
+      `channel` can run, and returns its result, or `{:error, {:locked,
+      detail}}` without running it when one already holds the lock.
+      `MobDeliverServer.publish/2` reads the current manifest, writes the
+      blobs and the new manifest inside it, so each publish is dated after
+      the one it replaces. Storage without `lock/4` has no way to make
+      that read-then-write atomic: serialise publishes to an app + channel
+      yourself (one publisher, or a lock of your own around `publish/2`),
+      or two overlapping publishes can leave the older-dated manifest
+      current and devices that saw the newer one refuse it.
   """
 
   @type t :: {module(), term()}
@@ -39,6 +50,11 @@ defmodule MobDeliverServer.Storage do
               :ok | {:error, term()}
   @callback get_manifest(config :: term(), app :: String.t(), channel :: String.t()) ::
               {:ok, binary()} | {:error, :not_found | term()}
+  @callback lock(config :: term(), app :: String.t(), channel :: String.t(), (-> result)) ::
+              result | {:error, {:locked, term()}}
+            when result: term()
+
+  @optional_callbacks lock: 4
 
   @doc "Whether `sha` is 64 lowercase hex characters."
   @spec valid_sha?(term()) :: boolean()

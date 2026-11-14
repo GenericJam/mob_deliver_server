@@ -69,4 +69,10 @@ static_endpoint? =
   Code.ensure_loaded?(MobDeliver.Config) and
     function_exported?(MobDeliver.Config, :endpoint_type, 0)
 
+if System.get_env("REQUIRE_STATIC_ENDPOINT") in ["1", "true"] and not static_endpoint?,
+  do:
+    raise(
+      "REQUIRE_STATIC_ENDPOINT is set but MOB_DELIVER_PATH's mob_deliver has no endpoint_type"
+    )
+
 ExUnit.start(exclude: if(static_endpoint?, do: [], else: [:static_endpoint]))

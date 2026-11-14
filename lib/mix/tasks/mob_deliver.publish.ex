@@ -176,8 +176,13 @@ defmodule Mix.Tasks.MobDeliver.Publish do
   defp format_error(:unreadable_current_manifest),
     do:
       "the manifest this publish would replace has no readable issued_at, so the new one " <>
-        "can't be dated after it (devices refuse a manifest older than one they've seen); " <>
-        "fix or remove it under --out"
+        "can't be dated after it (devices refuse a manifest that isn't newer than one they've " <>
+        "seen); fix or remove it under --out"
+
+  defp format_error({:locked, path}),
+    do:
+      "another publish to this app and channel is running (#{path}); if none is, a killed " <>
+        "one left that file behind: remove it and publish again"
 
   defp format_error(reason), do: inspect(reason)
 
